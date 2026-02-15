@@ -1,0 +1,224 @@
+     1	(**********************************************************************
+     2	 ProVerif model (Falcon-based Smart Healthcare Monitoring) - ULTRA2
+     3	  - All primitives use ULTRA-unique names to avoid prelude collisions
+     4	  - Signatures are bitstring (no sig<->bitstring conversion functions)
+     5	***********************************************************************)
+     6	
+     7	(* ===================== Types ===================== *)
+     8	type T_ID.
+     9	type T_DATA.
+    10	type T_TS.
+    11	type T_SID.
+    12	type T_NONCE.
+    13	type T_RISK.
+    14	type T_LOC.
+    15	type T_VER.
+    16	type T_HASH.
+    17	type T_SKEY.
+    18	type T_PKEY.
+    19	type T_SKSIG.
+    20	
+    21	free CH_NET : channel.
+    22	
+    23	(* ===================== Encoders ===================== *)
+    24	fun E_ID(T_ID) : bitstring.
+    25	fun E_PK(T_PKEY) : bitstring.
+    26	fun E_HASH(T_HASH) : bitstring.
+    27	fun E_TS(T_TS) : bitstring.
+    28	fun E_DATA(T_DATA) : bitstring.
+    29	fun E_SID(T_SID) : bitstring.
+    30	fun E_NONCE(T_NONCE) : bitstring.
+    31	fun E_RISK(T_RISK) : bitstring.
+    32	fun E_LOC(T_LOC) : bitstring.
+    33	fun E_VER(T_VER) : bitstring.
+    34	
+    35	(* ===================== Constructors ===================== *)
+    36	fun C2(bitstring, bitstring) : bitstring.
+    37	fun C3(bitstring, bitstring, bitstring) : bitstring.
+    38	
+    39	(* ===================== Hash/KDF ===================== *)
+    40	fun UH_9f1(bitstring) : T_HASH.
+    41	fun UKDF_9f1(T_HASH) : T_SKEY.
+    42	
+    43	(* ===================== Symmetric encryption (renamed to avoid collisions) ===================== *)
+    44	fun ENC__a1b2c3d4e5f6a7b8(bitstring, T_SKEY) : bitstring.
+    45	
+    46	reduc forall m:bitstring, k:T_SKEY;
+    47	  DEC__a1b2c3d4e5f6a7b8(ENC__a1b2c3d4e5f6a7b8(m,k),k) = m.
+    48	
+    49	(* ===================== Signatures (bitstring signatures) ===================== *)
+    50	fun UPK_9f1(T_SKSIG) : T_PKEY.
+    51	fun USIGN_9f1(bitstring, T_SKSIG) : bitstring.
+    52	const UOK_9f1 : bitstring.
+    53	
+    54	reduc forall m:bitstring, sk:T_SKSIG;
+    55	  UVFY_9f1(UPK_9f1(sk), m, USIGN_9f1(m,sk)) = UOK_9f1.
+    56	
+    57	(* ===================== Certificates ===================== *)
+    58	fun UCERT_9f1(T_ID, T_PKEY, bitstring) : bitstring.
+    59	
+    60	(* Turn certificates into term-constants (functions with no args) *)
+    61	fun CertPM()  : bitstring.
+    62	fun CertUAV() : bitstring.
+    63	fun CertHES() : bitstring.
+    64	fun CertHCS() : bitstring.
+    65	
+    66	(* ===================== Identities / keys ===================== *)
+    67	const ID_CA  : T_ID.
+    68	const ID_PM  : T_ID.
+    69	const ID_UAV : T_ID.
+    70	const ID_HES : T_ID.
+    71	const ID_HCS : T_ID.
+    72	
+    73	free SK_CA  : T_SKSIG [private].
+    74	free SK_PM  : T_SKSIG [private].
+    75	free SK_UAV : T_SKSIG [private].
+    76	free SK_HES : T_SKSIG [private].
+    77	free SK_HCS : T_SKSIG [private].
+    78	
+    79	(* Define certificates by equations (no free PK_* names) *)
+    80	equation CertPM() =
+    81	  UCERT_9f1(ID_PM, UPK_9f1(SK_PM),
+    82	    USIGN_9f1(C2(E_ID(ID_PM), E_PK(UPK_9f1(SK_PM))), SK_CA)).
+    83	
+    84	equation CertUAV() =
+    85	  UCERT_9f1(ID_UAV, UPK_9f1(SK_UAV),
+    86	    USIGN_9f1(C2(E_ID(ID_UAV), E_PK(UPK_9f1(SK_UAV))), SK_CA)).
+    87	
+    88	equation CertHES() =
+    89	  UCERT_9f1(ID_HES, UPK_9f1(SK_HES),
+    90	    USIGN_9f1(C2(E_ID(ID_HES), E_PK(UPK_9f1(SK_HES))), SK_CA)).
+    91	
+    92	equation CertHCS() =
+    93	  UCERT_9f1(ID_HCS, UPK_9f1(SK_HCS),
+    94	    USIGN_9f1(C2(E_ID(ID_HCS), E_PK(UPK_9f1(SK_HCS))), SK_CA)).
+    95	
+    96	(* ===================== Events ===================== *)
+    97	event PM_SentReport(T_ID, T_ID, bitstring).
+    98	event UAV_AcceptedReport(T_ID, T_ID, bitstring).
+    99	
+   100	event UAV_SentTelemetry(T_ID, T_ID, bitstring).
+   101	event HES_AcceptedTelemetry(T_ID, T_ID, bitstring).
+   102	
+   103	(* ===================== Secrets ===================== *)
+   104	free DataSecret : T_DATA [private].
+   105	free AIhash : T_HASH [private].
+   106	free verAI  : T_VER  [private].
+   107	free K_HES_HCS : T_SKEY [private].
+   108	
+   109	(* ===================== Queries ===================== *)
+   110	query attacker(E_DATA(DataSecret)).
+   111	
+   112	query m:bitstring;
+   113	  event(UAV_AcceptedReport(ID_UAV, ID_PM, m)) ==> event(PM_SentReport(ID_PM, ID_UAV, m)).
+   114	
+   115	query T:bitstring;
+   116	  event(HES_AcceptedTelemetry(ID_HES, ID_UAV, T)) ==> event(UAV_SentTelemetry(ID_UAV, ID_HES, T)).
+   117	
+   118	(* ===================== Roles ===================== *)
+   119	
+   120	let PM =
+   121	  new npm : T_NONCE;
+   122	  out(CH_NET, C2(C2(E_ID(ID_PM), E_NONCE(npm)), CertPM()));
+   123	
+   124	  in(CH_NET, x_uav_resp:bitstring);
+   125	
+   126	  (* x_uav_resp = C2( C2(E_ID(ID_UAV), nuav_bs), C2(sigU_bs, CertUAV()) ) *)
+   127	  let C2(uav_id_nuav, sig_and_cert) = x_uav_resp in
+   128	  let C2(idU_bs, nuav_bs) = uav_id_nuav in
+   129	  let C2(sigU_bs, certU) = sig_and_cert in
+   130	
+   131	  (* certU = UCERT_9f1(IDu, pku, sigca_bs) *)
+   132	  let UCERT_9f1(IDu:T_ID, pku:T_PKEY, sigca_bs:bitstring) = certU in
+   133	  if IDu = ID_UAV then
+   134	  if UVFY_9f1(UPK_9f1(SK_CA), C2(E_ID(IDu), E_PK(pku)), sigca_bs) = UOK_9f1 then
+   135	
+   136	  let transcript = C3(E_ID(ID_PM), E_ID(ID_UAV), C2(E_NONCE(npm), nuav_bs)) in
+   137	  if UVFY_9f1(pku, transcript, sigU_bs) = UOK_9f1 then
+   138	
+   139	  let kmu = UKDF_9f1(UH_9f1(C2(E_NONCE(npm), nuav_bs))) in
+   140	
+   141	  new sid0 : T_SID;
+   142	  new ts1  : T_TS;
+   143	
+   144	  let m =
+   145	    C3(E_DATA(DataSecret), E_TS(ts1),
+   146	       C2(E_SID(sid0), C2(E_NONCE(npm), nuav_bs))) in
+   147	
+   148	  let sigPM_bs = USIGN_9f1(m, SK_PM) in
+   149	  event PM_SentReport(ID_PM, ID_UAV, m);
+   150	
+   151	  out(CH_NET, C2(C2(ENC__a1b2c3d4e5f6a7b8(m, kmu), sigPM_bs), CertPM())).
+   152	
+   153	let UAV =
+   154	  in(CH_NET, x_pm_init:bitstring);
+   155	
+   156	  (* x_pm_init = C2(C2(E_ID(ID_PM), npm_bs), CertPM()) *)
+   157	  let C2(pm_fields, certPM_recv) = x_pm_init in
+   158	  let C2(pm_id_bs, npm_bs) = pm_fields in
+   159	
+   160	  let UCERT_9f1(IDm:T_ID, pkm:T_PKEY, sigca_pm:bitstring) = certPM_recv in
+   161	  if IDm = ID_PM then
+   162	  if UVFY_9f1(UPK_9f1(SK_CA), C2(E_ID(IDm), E_PK(pkm)), sigca_pm) = UOK_9f1 then
+   163	
+   164	  new nuav : T_NONCE;
+   165	  let nuav_bs = E_NONCE(nuav) in
+   166	
+   167	  let transcript = C3(E_ID(ID_PM), E_ID(ID_UAV), C2(npm_bs, nuav_bs)) in
+   168	  let sigU_bs = USIGN_9f1(transcript, SK_UAV) in
+   169	
+   170	  out(CH_NET, C2(C2(E_ID(ID_UAV), nuav_bs), C2(sigU_bs, CertUAV())));
+   171	
+   172	  in(CH_NET, x_pm_report:bitstring);
+   173	
+   174	  (* x_pm_report = C2(C2(encm, sigPM_bs), CertPM()) *)
+   175	  let C2(enc_and_sig, certPM_again) = x_pm_report in
+   176	  let C2(encm, sigPM_bs) = enc_and_sig in
+   177	
+   178	  let kmu = UKDF_9f1(UH_9f1(C2(npm_bs, nuav_bs))) in
+   179	  let m = DEC__a1b2c3d4e5f6a7b8(encm, kmu) in
+   180	
+   181	  let UCERT_9f1(IDm2:T_ID, pkm2:T_PKEY, sigca_pm2:bitstring) = certPM_again in
+   182	  if IDm2 = ID_PM then
+   183	  if UVFY_9f1(UPK_9f1(SK_CA), C2(E_ID(IDm2), E_PK(pkm2)), sigca_pm2) = UOK_9f1 then
+   184	
+   185	  if UVFY_9f1(pkm2, m, sigPM_bs) = UOK_9f1 then
+   186	    event UAV_AcceptedReport(ID_UAV, ID_PM, m);
+   187	
+   188	  new r1 : T_RISK;
+   189	  new loc1 : T_LOC;
+   190	  new ts2 : T_TS;
+   191	
+   192	  let R = C3(E_RISK(r1), E_LOC(loc1), E_TS(ts2)) in
+   193	  let T = C3(R, E_ID(ID_UAV), C2(E_HASH(AIhash), E_VER(verAI))) in
+   194	
+   195	  let sigT_bs = USIGN_9f1(T, SK_UAV) in
+   196	  event UAV_SentTelemetry(ID_UAV, ID_HES, T);
+   197	
+   198	  out(CH_NET, C2(C2(T, sigT_bs), CertUAV())).
+   199	
+   200	let HES =
+   201	  in(CH_NET, x_uav_tel:bitstring);
+   202	
+   203	  (* x_uav_tel = C2(C2(T, sigT_bs), CertUAV()) *)
+   204	  let C2(tel_and_sig, certU_recv) = x_uav_tel in
+   205	  let C2(T, sigT_bs) = tel_and_sig in
+   206	
+   207	  let UCERT_9f1(IDu:T_ID, pku:T_PKEY, sigca_u:bitstring) = certU_recv in
+   208	  if IDu = ID_UAV then
+   209	  if UVFY_9f1(UPK_9f1(SK_CA), C2(E_ID(IDu), E_PK(pku)), sigca_u) = UOK_9f1 then
+   210	
+   211	  if UVFY_9f1(pku, T, sigT_bs) = UOK_9f1 then
+   212	    event HES_AcceptedTelemetry(ID_HES, ID_UAV, T);
+   213	
+   214	  let store_record = C2(T, sigT_bs) in
+   215	  out(CH_NET, C2(E_ID(ID_HES), ENC__a1b2c3d4e5f6a7b8(store_record, K_HES_HCS))).
+   216	
+   217	let HCS =
+   218	  in(CH_NET, x_hes_to_hcs:bitstring);
+   219	  let C2(hes_id_bs, enc_record) = x_hes_to_hcs in
+   220	  let rec0 = DEC__a1b2c3d4e5f6a7b8(enc_record, K_HES_HCS) in
+   221	  0.
+   222	
+   223	process
+   224	  (!PM | !UAV | !HES | !HCS)
