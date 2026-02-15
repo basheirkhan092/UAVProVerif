@@ -1,0 +1,65 @@
+Process 0 (that is, the initial process):
+(
+    {1}!
+    {2}new sidPM: bitstring;
+    {3}new ts1: bitstring;
+    {4}let m: bitstring = (DataSecret,ts1,sidPM) in
+    {5}event PM_SentReport(ID_PM,ID_UAV,m);
+    {6}out(cPMUAV, (ID_PM,m))
+) | (
+    {7}!
+    {8}in(cPMUAV, (idpm: bitstring,m_1: bitstring));
+    {9}event UAV_AcceptedReport(ID_UAV,ID_PM,m_1);
+    {10}new risk: bitstring;
+    {11}new loc: bitstring;
+    {12}new ts2: bitstring;
+    {13}let T: bitstring = (risk,loc,ts2,ID_UAV) in
+    {14}event UAV_SentTelemetry(ID_UAV,ID_HES,T);
+    {15}out(cUAVHES, (ID_UAV,T))
+) | (
+    {16}!
+    {17}in(cUAVHES, (idu: bitstring,T_1: bitstring));
+    {18}event HES_AcceptedTelemetry(ID_HES,ID_UAV,T_1);
+    {19}out(cHESHCS, (ID_HES,T_1))
+) | (
+    {20}!
+    {21}in(cHESHCS, (idhes: bitstring,Tcloud: bitstring))
+)
+
+-- Query not attacker(DataSecret[]) in process 0.
+Translating the process into Horn clauses...
+Completing...                                                                 
+Starting query not attacker(DataSecret[])                                        
+RESULT not attacker(DataSecret[]) is true.                                   
+-- Query event(UAV_AcceptedReport(ID_UAV,ID_PM,m_2)) ==> event(PM_SentReport(ID_PM,ID_UAV,m_2)) in process 0.
+Translating the process into Horn clauses...
+Completing...                                                                 
+Starting query event(UAV_AcceptedReport(ID_UAV,ID_PM,m_2)) ==> event(PM_SentReport(ID_PM,ID_UAV,m_2))
+goal reachable: b-event(PM_SentReport(ID_PM,ID_UAV,(DataSecret[],ts1_1,sidPM_1))) -> event(UAV_AcceptedReport(ID_UAV,ID_PM,(DataSecret[],ts1_1,sidPM_1)))
+Abbreviations:
+ts1_1 = ts1[!1 = @sid]
+sidPM_1 = sidPM[!1 = @sid]
+RESULT event(UAV_AcceptedReport(ID_UAV,ID_PM,m_2)) ==> event(PM_SentReport(ID_PM,ID_UAV,m_2)) is true.
+-- Query event(HES_AcceptedTelemetry(ID_HES,ID_UAV,T_2)) ==> event(UAV_SentTelemetry(ID_UAV,ID_HES,T_2)) in process 0.
+Translating the process into Horn clauses...
+Completing...                                                                 
+Starting query event(HES_AcceptedTelemetry(ID_HES,ID_UAV,T_2)) ==> event(UAV_SentTelemetry(ID_UAV,ID_HES,T_2))
+goal reachable: b-event(UAV_SentTelemetry(ID_UAV,ID_HES,(risk_1,loc_1,ts2_1,ID_UAV))) -> event(HES_AcceptedTelemetry(ID_HES,ID_UAV,(risk_1,loc_1,ts2_1,ID_UAV)))
+Abbreviations:
+ts1_1 = ts1[!1 = @sid]
+sidPM_1 = sidPM[!1 = @sid]
+risk_1 = risk[m_1 = (DataSecret[],ts1_1,sidPM_1),idpm = ID_PM,!1 = @sid_1]
+loc_1 = loc[m_1 = (DataSecret[],ts1_1,sidPM_1),idpm = ID_PM,!1 = @sid_1]
+ts2_1 = ts2[m_1 = (DataSecret[],ts1_1,sidPM_1),idpm = ID_PM,!1 = @sid_1]
+RESULT event(HES_AcceptedTelemetry(ID_HES,ID_UAV,T_2)) ==> event(UAV_SentTelemetry(ID_UAV,ID_HES,T_2)) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query not attacker(DataSecret[]) is true.
+
+Query event(UAV_AcceptedReport(ID_UAV,ID_PM,m_2)) ==> event(PM_SentReport(ID_PM,ID_UAV,m_2)) is true.
+
+Query event(HES_AcceptedTelemetry(ID_HES,ID_UAV,T_2)) ==> event(UAV_SentTelemetry(ID_UAV,ID_HES,T_2)) is true.
+
+--------------------------------------------------------------
