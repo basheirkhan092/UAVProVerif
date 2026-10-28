@@ -1,0 +1,305 @@
+(* =====================================================================
+   Post-quantum UAV-assisted healthcare framework
+   Forward-secrecy variant: PM -> UAV -> HES -> HCS  (ProVerif 2.05)
+
+   Hops modelled
+     PM--UAV   : M1, M2, M3 (handshake, UAV = KEM holder) + M4 (report)
+     UAV--HES  : M1', M2', M3' (handshake, HES = KEM holder) + M5 (telemetry)
+     HES--HCS  : M1'', M2'', M3'' (handshake, HCS = KEM holder) + forwarding
+   Abstractions
+     - Falcon-512   : signature with checksign(sign(m,sk),pk(sk)) = m
+     - ML-KEM-768   : decaps(encC(kpk(dk),r),dk) = encK(kpk(dk),r)
+     - SHA-256, HKDF, HMAC : one-way functions
+     - AES-256-GCM  : AEAD; decryption fails on any change to c or AD
+     - Timestamps, session identifiers and counters : fresh names
+     - Revocation, counter state and OTA updates are not modelled
+   Adversary
+     - Dolev-Yao on channel c
+     - Holds a valid TH-issued PM certificate (compromised patient mobile)
+   ===================================================================== *)
+
+free c: channel.
+
+type host.
+type skey.
+type pkey.
+type kemsk.
+type kempk.
+type key.
+
+(* ---------- Falcon-512 ---------- *)
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+
+(* ---------- ML-KEM-768 ---------- *)
+fun kpk(kemsk): kempk.
+fun encC(kempk, bitstring): bitstring.
+fun encK(kempk, bitstring): key.
+reduc forall dk: kemsk, r: bitstring;
+  decaps(encC(kpk(dk), r), dk) = encK(kpk(dk), r).
+
+(* ---------- SHA-256, HKDF-SHA-256, HMAC-SHA-256 ---------- *)
+fun h(bitstring): bitstring.
+fun hkdf(key, bitstring, bitstring): key.
+fun mac(key, bitstring): bitstring.
+
+(* ---------- AES-256-GCM ---------- *)
+fun aenc(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, m: bitstring, ad: bitstring;
+  adec(k, n, aenc(k, n, m, ad), ad) = m.
+
+(* ---------- UAV analytics (one-way) ---------- *)
+fun res(bitstring): bitstring.
+
+(* ---------- Constants ---------- *)
+const rPM, rUAV, rHES, rHCS: bitstring.   (* certificate roles          *)
+const tM1, tM2, tTEL: bitstring.          (* domain-separation tags     *)
+const lFwd, lConf: bitstring.             (* HKDF labels                *)
+const cInit, cResp: bitstring.            (* key-confirmation labels    *)
+
+(* ---------- Honest identities and long-term keys ---------- *)
+const idPM, idUAV, idHES, idHCS: host.
+free skTH: skey [private].
+free skPM, skUAV, skHES, skHCS: skey [private].
+
+(* ---------- Compromised patient mobile (insider) ---------- *)
+const idA: host.
+free skA: skey.                           (* known to the attacker *)
+
+(* ---------- Secrets ---------- *)
+free DataSecret: bitstring [private].     (* patient report (M4)  *)
+free TeleSecret: bitstring [private].     (* UAV telemetry (M5)   *)
+
+(* ---------- Events ---------- *)
+(* PM--UAV *)
+event PMStartedSession(host, host, bitstring, kempk, bitstring).
+event PMAcceptedSession(host, host, bitstring, kempk, bitstring).
+event UAVConfirmedSession(host, host, bitstring, kempk, bitstring).
+event PMSentReport(host, host, bitstring, bitstring, bitstring).
+event UAVAcceptedReport(host, host, bitstring, bitstring, bitstring).
+(* UAV--HES *)
+event UAVStartedHESSession(host, host, bitstring, kempk, bitstring).
+event UAVAcceptedHESSession(host, host, bitstring, kempk, bitstring).
+event HESConfirmedSession(host, host, bitstring, kempk, bitstring).
+event UAVSignedTelemetry(host, bitstring).
+event UAVSentTelemetry(host, host, bitstring, bitstring, bitstring).
+event HESAcceptedTelemetry(host, host, bitstring, bitstring, bitstring).
+(* HES--HCS *)
+event HESStartedHCSSession(host, host, bitstring, kempk, bitstring).
+event HESAcceptedHCSSession(host, host, bitstring, kempk, bitstring).
+event HCSConfirmedSession(host, host, bitstring, kempk, bitstring).
+event HESForwarded(host, host, host, bitstring).
+event HCSStored(host, host, host, bitstring).
+event HCSStoredResult(host, host, bitstring).
+
+(* QUERIES-BEGIN *)
+(* ---------- Forward secrecy (Q15) ----------
+   All long-term signing keys are revealed in phase 1. Data exchanged in
+   phase 0 must remain secret. *)
+query attacker(DataSecret) phase 1.
+query attacker(TeleSecret) phase 1.
+(* QUERIES-END *)
+
+(* =====================================================================
+   Patient mobile: encapsulator on the PM--UAV hop
+   ===================================================================== *)
+let PM(pkTH: pkey, certPM: bitstring) =
+  (* M1: UAV -> PM *)
+  in(c, (xU: host, sid: bitstring, nU: bitstring, tsU: bitstring,
+         ek: kempk, sigU: bitstring, certU: bitstring));
+  let (=xU, pkU: pkey, =rUAV) = checksign(certU, pkTH) in
+  let (=tM1, =xU, =sid, =nU, =tsU, =ek) = checksign(sigU, pkU) in
+  (* M2: PM -> UAV *)
+  new r: bitstring;
+  new nP: bitstring;
+  new tsP: bitstring;
+  let ct = encC(ek, r) in
+  let kPM = encK(ek, r) in
+  let th = h((xU, idPM, sid, nU, nP, tsU, tsP, ek, ct)) in
+  let kF = hkdf(kPM, th, lFwd) in
+  let kC = hkdf(kPM, th, lConf) in
+  event PMStartedSession(idPM, xU, sid, ek, ct);
+  out(c, (idPM, nP, tsP, ct,
+          sign((tM2, idPM, xU, sid, nU, nP, tsP, ek, ct), skPM),
+          certPM, mac(kC, (cInit, th))));
+  (* M3: UAV -> PM *)
+  in(c, tauU: bitstring);
+  if tauU = mac(kC, (cResp, th)) then
+  event PMAcceptedSession(idPM, xU, sid, ek, ct);
+  (* M4: PM -> UAV *)
+  new ctr: bitstring;
+  event PMSentReport(idPM, xU, sid, ctr, DataSecret);
+  out(c, (sid, ctr, aenc(kF, ctr, DataSecret, (sid, idPM, xU, ctr)))).
+
+(* =====================================================================
+   UAV: KEM holder on PM--UAV, encapsulator on UAV--HES
+   ===================================================================== *)
+let UAV(pkTH: pkey, certUAV: bitstring) =
+  (* M1: UAV -> PM *)
+  new sid: bitstring;
+  new nU: bitstring;
+  new tsU: bitstring;
+  new dk: kemsk;
+  let ek = kpk(dk) in
+  out(c, (idUAV, sid, nU, tsU, ek,
+          sign((tM1, idUAV, sid, nU, tsU, ek), skUAV), certUAV));
+  (* M2: PM -> UAV *)
+  in(c, (xP: host, nP: bitstring, tsP: bitstring, ct: bitstring,
+         sigP: bitstring, certP: bitstring, tauP: bitstring));
+  let (=xP, pkP: pkey, =rPM) = checksign(certP, pkTH) in
+  let (=tM2, =xP, =idUAV, =sid, =nU, =nP, =tsP, =ek, =ct) = checksign(sigP, pkP) in
+  let k = decaps(ct, dk) in
+  let th = h((idUAV, xP, sid, nU, nP, tsU, tsP, ek, ct)) in
+  let kF = hkdf(k, th, lFwd) in
+  let kC = hkdf(k, th, lConf) in
+  if tauP = mac(kC, (cInit, th)) then
+  event UAVConfirmedSession(idUAV, xP, sid, ek, ct);
+  (* M3: UAV -> PM *)
+  out(c, mac(kC, (cResp, th)));
+  (* M4: PM -> UAV *)
+  in(c, (=sid, ctr: bitstring, cj: bitstring));
+  let m = adec(kF, ctr, cj, (sid, xP, idUAV, ctr)) in
+  event UAVAcceptedReport(idUAV, xP, sid, ctr, m);
+  (* M1': HES -> UAV *)
+  in(c, (xH: host, sid2: bitstring, nH: bitstring, tsH: bitstring,
+         ek2: kempk, sigH: bitstring, certH: bitstring));
+  let (=xH, pkH: pkey, =rHES) = checksign(certH, pkTH) in
+  let (=tM1, =xH, =sid2, =nH, =tsH, =ek2) = checksign(sigH, pkH) in
+  (* M2': UAV -> HES *)
+  new r2: bitstring;
+  new nU2: bitstring;
+  new tsU2: bitstring;
+  let ct2 = encC(ek2, r2) in
+  let k2 = encK(ek2, r2) in
+  let th2 = h((xH, idUAV, sid2, nH, nU2, tsH, tsU2, ek2, ct2)) in
+  let kF2 = hkdf(k2, th2, lFwd) in
+  let kC2 = hkdf(k2, th2, lConf) in
+  event UAVStartedHESSession(idUAV, xH, sid2, ek2, ct2);
+  out(c, (idUAV, nU2, tsU2, ct2,
+          sign((tM2, idUAV, xH, sid2, nH, nU2, tsU2, ek2, ct2), skUAV),
+          certUAV, mac(kC2, (cInit, th2))));
+  (* M3': HES -> UAV *)
+  in(c, tauH: bitstring);
+  if tauH = mac(kC2, (cResp, th2)) then
+  event UAVAcceptedHESSession(idUAV, xH, sid2, ek2, ct2);
+  (* M5: UAV -> HES, signed and encrypted telemetry *)
+  new ctr2: bitstring;
+  let tT = (idUAV, xP, res(m), TeleSecret, sid2, ctr2) in
+  let sigT = sign((tTEL, tT), skUAV) in
+  event UAVSignedTelemetry(idUAV, tT);
+  event UAVSentTelemetry(idUAV, xH, sid2, ctr2, tT);
+  out(c, (sid2, ctr2, aenc(kF2, ctr2, (tT, sigT), (sid2, idUAV, xH, ctr2)))).
+
+(* =====================================================================
+   HES: KEM holder on UAV--HES, encapsulator on HES--HCS
+   ===================================================================== *)
+let HES(pkTH: pkey, certHES: bitstring) =
+  (* M1': HES -> UAV *)
+  new sid2: bitstring;
+  new nH: bitstring;
+  new tsH: bitstring;
+  new dk2: kemsk;
+  let ek2 = kpk(dk2) in
+  out(c, (idHES, sid2, nH, tsH, ek2,
+          sign((tM1, idHES, sid2, nH, tsH, ek2), skHES), certHES));
+  (* M2': UAV -> HES *)
+  in(c, (xU: host, nU2: bitstring, tsU2: bitstring, ct2: bitstring,
+         sigU: bitstring, certU: bitstring, tauU: bitstring));
+  let (=xU, pkU: pkey, =rUAV) = checksign(certU, pkTH) in
+  let (=tM2, =xU, =idHES, =sid2, =nH, =nU2, =tsU2, =ek2, =ct2) = checksign(sigU, pkU) in
+  let k2 = decaps(ct2, dk2) in
+  let th2 = h((idHES, xU, sid2, nH, nU2, tsH, tsU2, ek2, ct2)) in
+  let kF2 = hkdf(k2, th2, lFwd) in
+  let kC2 = hkdf(k2, th2, lConf) in
+  if tauU = mac(kC2, (cInit, th2)) then
+  event HESConfirmedSession(idHES, xU, sid2, ek2, ct2);
+  (* M3': HES -> UAV *)
+  out(c, mac(kC2, (cResp, th2)));
+  (* M5: UAV -> HES *)
+  in(c, (=sid2, ctr2: bitstring, ci: bitstring));
+  let (tT: bitstring, sigT: bitstring) = adec(kF2, ctr2, ci, (sid2, xU, idHES, ctr2)) in
+  let (=tTEL, =tT) = checksign(sigT, pkU) in
+  let (=xU, xP: host, rr: bitstring, sec: bitstring, =sid2, =ctr2) = tT in
+  event HESAcceptedTelemetry(idHES, xU, sid2, ctr2, tT);
+  (* M1'': HCS -> HES *)
+  in(c, (xC: host, sid3: bitstring, nC: bitstring, tsC: bitstring,
+         ek3: kempk, sigC: bitstring, certC: bitstring));
+  let (=xC, pkC: pkey, =rHCS) = checksign(certC, pkTH) in
+  let (=tM1, =xC, =sid3, =nC, =tsC, =ek3) = checksign(sigC, pkC) in
+  (* M2'': HES -> HCS *)
+  new r3: bitstring;
+  new nH3: bitstring;
+  new tsH3: bitstring;
+  let ct3 = encC(ek3, r3) in
+  let k3 = encK(ek3, r3) in
+  let th3 = h((xC, idHES, sid3, nC, nH3, tsC, tsH3, ek3, ct3)) in
+  let kF3 = hkdf(k3, th3, lFwd) in
+  let kC3 = hkdf(k3, th3, lConf) in
+  event HESStartedHCSSession(idHES, xC, sid3, ek3, ct3);
+  out(c, (idHES, nH3, tsH3, ct3,
+          sign((tM2, idHES, xC, sid3, nC, nH3, tsH3, ek3, ct3), skHES),
+          certHES, mac(kC3, (cInit, th3))));
+  (* M3'': HCS -> HES *)
+  in(c, tauC: bitstring);
+  if tauC = mac(kC3, (cResp, th3)) then
+  event HESAcceptedHCSSession(idHES, xC, sid3, ek3, ct3);
+  (* Forward the signed record to the HCS *)
+  new ctr3: bitstring;
+  event HESForwarded(idHES, xC, xU, tT);
+  out(c, (sid3, ctr3, aenc(kF3, ctr3, (tT, sigT, certU), (sid3, idHES, xC, ctr3)))).
+
+(* =====================================================================
+   HCS: KEM holder on HES--HCS, independent re-verification
+   ===================================================================== *)
+let HCS(pkTH: pkey, certHCS: bitstring) =
+  (* M1'': HCS -> HES *)
+  new sid3: bitstring;
+  new nC: bitstring;
+  new tsC: bitstring;
+  new dk3: kemsk;
+  let ek3 = kpk(dk3) in
+  out(c, (idHCS, sid3, nC, tsC, ek3,
+          sign((tM1, idHCS, sid3, nC, tsC, ek3), skHCS), certHCS));
+  (* M2'': HES -> HCS *)
+  in(c, (xH: host, nH3: bitstring, tsH3: bitstring, ct3: bitstring,
+         sigH: bitstring, certH: bitstring, tauH: bitstring));
+  let (=xH, pkH: pkey, =rHES) = checksign(certH, pkTH) in
+  let (=tM2, =xH, =idHCS, =sid3, =nC, =nH3, =tsH3, =ek3, =ct3) = checksign(sigH, pkH) in
+  let k3 = decaps(ct3, dk3) in
+  let th3 = h((idHCS, xH, sid3, nC, nH3, tsC, tsH3, ek3, ct3)) in
+  let kF3 = hkdf(k3, th3, lFwd) in
+  let kC3 = hkdf(k3, th3, lConf) in
+  if tauH = mac(kC3, (cInit, th3)) then
+  event HCSConfirmedSession(idHCS, xH, sid3, ek3, ct3);
+  (* M3'': HCS -> HES *)
+  out(c, mac(kC3, (cResp, th3)));
+  (* Forwarded record *)
+  in(c, (=sid3, ctr3: bitstring, cr: bitstring));
+  let (tT: bitstring, sigT: bitstring, certU: bitstring) =
+      adec(kF3, ctr3, cr, (sid3, xH, idHCS, ctr3)) in
+  (* Independent re-verification of the UAV certificate and signature *)
+  let (xU: host, pkU: pkey, =rUAV) = checksign(certU, pkTH) in
+  let (=tTEL, =tT) = checksign(sigT, pkU) in
+  let (=xU, xP: host, rr: bitstring, sec: bitstring, sid2: bitstring, ctr2: bitstring) = tT in
+  event HCSStored(idHCS, xH, xU, tT);
+  event HCSStoredResult(xU, xP, rr).
+
+(* =====================================================================
+   Main process
+   ===================================================================== *)
+process
+  let pkTH    = pk(skTH) in
+  let certPM  = sign((idPM,  pk(skPM),  rPM),  skTH) in
+  let certUAV = sign((idUAV, pk(skUAV), rUAV), skTH) in
+  let certHES = sign((idHES, pk(skHES), rHES), skTH) in
+  let certHCS = sign((idHCS, pk(skHCS), rHCS), skTH) in
+  let certA   = sign((idA,   pk(skA),   rPM),  skTH) in
+  out(c, (pkTH, certPM, certUAV, certHES, certHCS, certA));
+  (
+      (!PM(pkTH, certPM))
+    | (!UAV(pkTH, certUAV))
+    | (!HES(pkTH, certHES))
+    | (!HCS(pkTH, certHCS))
+    | (phase 1; out(c, (skPM, skUAV, skHES, skHCS)))
+  )
